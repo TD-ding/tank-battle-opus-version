@@ -613,13 +613,30 @@
     dropPowerup(x, y) {
       const type = POWER_TYPES[rnd(POWER_TYPES.length)];
       const w = TILE - 6, h = TILE - 6;
-      this.powerups.push({
-        type,
-        x: clamp(x - w / 2, 0, W - w),
-        y: clamp(y - h / 2, 0, H - h),
-        w, h,
-        life: CONFIG.powerup.life,
-      });
+      let px = clamp(x - w / 2, 0, W - w);
+      let py = clamp(y - h / 2, 0, H - h);
+      // 若落点压在钢墙/基地等实心格上（玩家无法进入拾取），就近寻找空格
+      if (this.collidesSolid({ x: px, y: py, w, h })) {
+        const spot = this.findFreeCell(Math.floor((px + w / 2) / TILE), Math.floor((py + h / 2) / TILE));
+        if (spot) { px = spot.c * TILE + 3; py = spot.r * TILE + 3; }
+      }
+      this.powerups.push({ type, x: px, y: py, w, h, life: CONFIG.powerup.life });
+    }
+
+    // 以 (c,r) 为中心螺旋扩散，找到第一个非实心格
+    findFreeCell(c0, r0) {
+      for (let rad = 0; rad < Math.max(COLS, ROWS); rad++) {
+        for (let dr = -rad; dr <= rad; dr++) {
+          for (let dc = -rad; dc <= rad; dc++) {
+            if (Math.abs(dr) !== rad && Math.abs(dc) !== rad) continue; // 只看当前环
+            const c = c0 + dc, r = r0 + dr;
+            if (c < 0 || r < 0 || c >= COLS || r >= ROWS) continue;
+            const t = this.grid[r][c];
+            if (t === T.EMPTY || t === T.GRASS) return { c, r };
+          }
+        }
+      }
+      return null;
     }
 
     updatePowerups(dt) {
