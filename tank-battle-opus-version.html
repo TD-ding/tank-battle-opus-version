@@ -186,6 +186,10 @@
         try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
         catch (e) { this.enabled = false; }
       }
+      // 自动播放策略：上下文可能处于 suspended，需在用户手势中 resume
+      if (this.ctx && this.ctx.state === "suspended") {
+        this.ctx.resume().catch(() => {});
+      }
     },
     beep(freq, dur, type, vol) {
       if (!this.enabled) return;
