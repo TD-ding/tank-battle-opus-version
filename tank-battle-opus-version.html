@@ -82,6 +82,7 @@
     <span>最高 <b id="hud-best">0</b></span>
     <span>生命 <b id="hud-lives">3</b></span>
     <span>剩余敌人 <b id="hud-enemies">0</b></span>
+    <span>音效 <b id="hud-sound">开</b></span>
   </div>
 
   <div class="stage">
@@ -176,6 +177,38 @@
     return Math.floor((n - Math.floor(n)) * 22) + 3;
   }
 
+  /* ===================== 音效（WebAudio 简易合成，无外部资源）===================== */
+  const Sound = {
+    ctx: null,
+    enabled: true,
+    ensure() {
+      if (!this.ctx) {
+        try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+        catch (e) { this.enabled = false; }
+      }
+    },
+    beep(freq, dur, type, vol) {
+      if (!this.enabled) return;
+      this.ensure();
+      if (!this.ctx) return;
+      try {
+        const o = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        o.type = type || "square";
+        o.frequency.value = freq;
+        g.gain.value = vol || 0.05;
+        o.connect(g); g.connect(this.ctx.destination);
+        o.start();
+        g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + dur);
+        o.stop(this.ctx.currentTime + dur);
+      } catch (e) { /* 忽略 */ }
+    },
+    fire()    { this.beep(660, 0.05, "square", 0.04); },
+    hit()     { this.beep(120, 0.12, "sawtooth", 0.06); },
+    explode() { this.beep(90, 0.22, "sawtooth", 0.07); },
+    clear()   { this.beep(523, 0.12, "triangle", 0.06); setTimeout(() => this.beep(784, 0.16, "triangle", 0.06), 120); },
+  };
+
   /* =====================================================================
      地图模板。符号: . 空  B 砖  S 钢  G 草  X 基地
      ===================================================================== */
@@ -191,8 +224,8 @@
     "...B.B.B.....",
     ".B.S.B.S.B.B.",
     ".B.G.S.G.B.B.",
-    ".BB.B.B.BBB..",
-    "....B.X.B....",
+    ".BB.BBBBB.BB.",
+    "....BBXBB....",
   ];
 
   function buildGrid() {
@@ -290,6 +323,7 @@
       const by = c.y + d.y * (this.h / 2 + 4);
       game.bullets.push(new Bullet(bx, by, this.dir, this.kind, this.bulletSpeed));
       this.cooldown = this.fireGap;
+      if (this.kind === "player") Sound.fire();
     }
 
     updateTimers(dt) {
@@ -355,6 +389,7 @@
         bestHud: document.getElementById("hud-best"),
         lives: document.getElementById("hud-lives"),
         enemies: document.getElementById("hud-enemies"),
+        sound: document.getElementById("hud-sound"),
       };
     }
 
@@ -493,8 +528,8 @@
 
         // 撞瓦片
         for (const o of this.tilesIn(b)) {
-          if (o.t === T.BRICK) { this.grid[o.r][o.c] = T.EMPTY; b.dead = true; break; }
-          if (o.t === T.STEEL) { b.dead = true; break; }
+          if (o.t === T.BRICK) { this.grid[o.r][o.c] = T.EMPTY; b.dead = true; Sound.hit(); break; }
+          if (o.t === T.STEEL) { b.dead = true; Sound.hit(); break; }
           if (o.t === T.BASE)  {
             this.grid[o.r][o.c] = T.EMPTY; this.baseAlive = false;
             b.dead = true; this.boom(b.x, b.y, true); break;
@@ -532,6 +567,7 @@
 
     boom(x, y, big) {
       this.explosions.push({ x, y, t: big ? 0.5 : 0.32, max: big ? 0.5 : 0.32, big: !!big });
+      Sound.explode();
     }
 
     respawnOrLose() {
@@ -545,6 +581,7 @@
       this.score += CONFIG.clearBonus;                  // 过关奖励
       this.level++;
       this.commitBest();
+      Sound.clear();
       this.state = "win";
       this.showOverlay(
         `第 ${this.level - 1} 关完成！`,
@@ -597,6 +634,7 @@
       this.el.bestHud.textContent = this.best;
       this.el.lives.textContent = Math.max(this.lives, 0);
       this.el.enemies.textContent = this.enemiesRemaining + this.enemies.length;
+      if (this.el.sound) this.el.sound.textContent = Sound.enabled ? "开" : "关";
     }
 
     /* ===================== 渲染 ===================== */
@@ -722,12 +760,19 @@
     game.el.bestHud.textContent = game.best;
     game.showOverlay(
       "坦克大战 · opus-version",
-      "用方向键 / WASD 移动，空格开火。\n摧毁所有敌方坦克并守住底部基地！\nP / Esc 暂停。",
+      "用方向键 / WASD 移动，空格开火。\n摧毁所有敌方坦克并守住底部基地！\nP / Esc 暂停，M 开关音效。",
       "开始游戏",
       () => { game.resetSession(); game.state = "playing"; }
     );
 
     window.addEventListener("keydown", (e) => {
+      Sound.ensure();
+      if (e.code === "KeyM") {
+        Sound.enabled = !Sound.enabled;
+        game.updateHud();
+        e.preventDefault();
+        return;
+      }
       if (e.code === "KeyP" || e.code === "Escape") {
         if (game.state === "playing" || game.state === "paused") { e.preventDefault(); game.togglePause(); }
         return;
