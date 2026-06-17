@@ -732,7 +732,7 @@
       this.el.title.textContent = title;
       this.el.text.textContent = text;
       this.el.btn.textContent = btnLabel;
-      this.el.btn.onclick = () => { this.hideOverlay(); onClick(); };
+      this.el.btn.onclick = () => { this.hideOverlay(); this.clearInput(); onClick(); };
       this.el.overlay.classList.remove("hidden");
     }
     hideOverlay() { this.el.overlay.classList.add("hidden"); }
@@ -959,6 +959,10 @@
 
     // 失焦自动暂停
     window.addEventListener("blur", () => { if (game.state === "playing") game.togglePause(); });
+    // 切换标签页/最小化时也自动暂停（移动端更稳）
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && game.state === "playing") game.togglePause();
+    });
 
     game.start();
   }
