@@ -82,6 +82,7 @@
     <span>最高 <b id="hud-best">0</b></span>
     <span>生命 <b id="hud-lives">3</b></span>
     <span>剩余敌人 <b id="hud-enemies">0</b></span>
+    <span>火力 <b id="hud-power">Lv1</b></span>
     <span>音效 <b id="hud-sound">开</b></span>
   </div>
 
@@ -153,7 +154,16 @@
     killScore: 100,          // 击毁敌人得分
     clearBonus: 200,         // 过关奖励
     dtCap: 0.05,             // 单帧最大 dt（防切后台穿墙）
+    powerup: {
+      life: 12,              // 道具在场存活时间（秒）
+      carrierRate: 0.34,     // 敌人携带道具的概率
+      shieldTime: 7,         // 护盾道具持续时间（秒）
+      starScore: 300,        // 拾取星星额外加分
+    },
   };
+
+  // 道具类型: star=武器升级, shield=护盾, bomb=清屏
+  const POWER_TYPES = ["star", "shield", "bomb"];
 
   // ---- 工具函数 ----
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -211,6 +221,8 @@
     hit()     { this.beep(120, 0.12, "sawtooth", 0.06); },
     explode() { this.beep(90, 0.22, "sawtooth", 0.07); },
     clear()   { this.beep(523, 0.12, "triangle", 0.06); setTimeout(() => this.beep(784, 0.16, "triangle", 0.06), 120); },
+    power()   { this.beep(880, 0.08, "square", 0.05); setTimeout(() => this.beep(1175, 0.12, "square", 0.05), 80); },
+    bomb()    { this.beep(160, 0.05, "sawtooth", 0.07); setTimeout(() => this.beep(110, 0.25, "sawtooth", 0.07), 60); },
   };
 
   /* =====================================================================
@@ -295,6 +307,11 @@
       this.spawnGuard = cfg.spawnGuard;     // 出生保护
       this.aiTurn = rnd(2) + 1;
       this.aiFire = Math.random() * 1.2 + 0.4;
+      // 玩家武器升级 / 护盾（道具系统）
+      this.powerLevel = 1;                  // 1=单发, 2=连发更快, 3=双发
+      this.shield = 0;                      // 护盾剩余时间（秒）
+      // 敌人是否携带道具（被击毁时掉落）
+      this.carry = kind === "enemy" && Math.random() < CONFIG.powerup.carrierRate;
     }
 
     center() { return { x: this.x + this.w / 2, y: this.y + this.h / 2 }; }
@@ -316,23 +333,35 @@
 
     fire(game) {
       if (!this.canFire()) return;
-      // 玩家同屏子弹上限（经典坦克大战手感）
+      // 玩家同屏子弹上限（经典坦克大战手感，升级后上限提高）
       if (this.kind === "player") {
+        const cap = this.powerLevel >= 3 ? 4 : CONFIG.player.maxBullets;
         const live = game.bullets.filter((b) => b.owner === "player" && !b.dead).length;
-        if (live >= CONFIG.player.maxBullets) return;
+        if (live >= cap) return;
       }
       const c = this.center();
       const d = DIRS[this.dir];
       const bx = c.x + d.x * (this.w / 2 + 4);
       const by = c.y + d.y * (this.h / 2 + 4);
-      game.bullets.push(new Bullet(bx, by, this.dir, this.kind, this.bulletSpeed));
-      this.cooldown = this.fireGap;
+      const spd = this.kind === "player" && this.powerLevel >= 2
+        ? this.bulletSpeed * 1.25 : this.bulletSpeed;
+      game.bullets.push(new Bullet(bx, by, this.dir, this.kind, spd));
+      // 三级火力：并排双发
+      if (this.kind === "player" && this.powerLevel >= 3) {
+        const perp = this.dir === "up" || this.dir === "down" ? { x: 1, y: 0 } : { x: 0, y: 1 };
+        game.bullets.push(new Bullet(bx + perp.x * 8, by + perp.y * 8, this.dir, this.kind, spd));
+        game.bullets.push(new Bullet(bx - perp.x * 8, by - perp.y * 8, this.dir, this.kind, spd));
+      }
+      // 升级后射速更快
+      this.cooldown = this.kind === "player" && this.powerLevel >= 2
+        ? this.fireGap * 0.7 : this.fireGap;
       if (this.kind === "player") Sound.fire();
     }
 
     updateTimers(dt) {
       if (this.cooldown > 0) this.cooldown -= dt;
       if (this.spawnGuard > 0) this.spawnGuard -= dt;
+      if (this.shield > 0) this.shield -= dt;
     }
 
     // 敌人 AI：定时转向（偏向基地），卡住时换向，间歇开火
@@ -393,6 +422,7 @@
         bestHud: document.getElementById("hud-best"),
         lives: document.getElementById("hud-lives"),
         enemies: document.getElementById("hud-enemies"),
+        power: document.getElementById("hud-power"),
         sound: document.getElementById("hud-sound"),
       };
     }
@@ -410,6 +440,7 @@
       this.bullets = [];
       this.enemies = [];
       this.explosions = [];
+      this.powerups = [];         // 场上道具
       this.baseAlive = true;
 
       this.enemiesRemaining = 4 + this.level * 2;          // 本关敌人总数
@@ -499,6 +530,7 @@
       for (const e of this.enemies) { e.updateTimers(dt); e.ai(dt, this); }
       for (const b of this.bullets) b.update(dt);
       this.resolveBullets();
+      this.updatePowerups(dt);
 
       for (const ex of this.explosions) ex.t -= dt;
       this.explosions = this.explosions.filter((ex) => ex.t > 0);
@@ -555,13 +587,16 @@
               e.dead = true; b.dead = true;
               this.score += CONFIG.killScore;
               this.boom(e.x + e.w / 2, e.y + e.h / 2);
+              if (e.carry) this.dropPowerup(e.x + e.w / 2, e.y + e.h / 2);
               this.updateHud();
               break;
             }
           }
         } else {
           const p = this.player;
-          if (!p.dead && p.spawnGuard <= 0 && aabb(b, p)) {
+          if (!p.dead && aabb(b, p)) {
+            // 出生保护或护盾：抵消子弹，玩家不死
+            if (p.spawnGuard > 0 || p.shield > 0) { b.dead = true; continue; }
             p.dead = true; b.dead = true;
             this.boom(p.x + p.w / 2, p.y + p.h / 2, true);
           }
@@ -572,6 +607,51 @@
     boom(x, y, big) {
       this.explosions.push({ x, y, t: big ? 0.5 : 0.32, max: big ? 0.5 : 0.32, big: !!big });
       Sound.explode();
+    }
+
+    // ---- 道具系统 ----
+    dropPowerup(x, y) {
+      const type = POWER_TYPES[rnd(POWER_TYPES.length)];
+      const w = TILE - 6, h = TILE - 6;
+      this.powerups.push({
+        type,
+        x: clamp(x - w / 2, 0, W - w),
+        y: clamp(y - h / 2, 0, H - h),
+        w, h,
+        life: CONFIG.powerup.life,
+      });
+    }
+
+    updatePowerups(dt) {
+      const p = this.player;
+      for (const pu of this.powerups) {
+        pu.life -= dt;
+        if (p && !p.dead && aabb(pu, p)) { pu.dead = true; this.applyPowerup(pu.type); }
+      }
+      this.powerups = this.powerups.filter((pu) => !pu.dead && pu.life > 0);
+    }
+
+    applyPowerup(type) {
+      const p = this.player;
+      if (type === "star") {
+        p.powerLevel = Math.min(p.powerLevel + 1, 3);
+        this.score += CONFIG.powerup.starScore;
+        Sound.power();
+      } else if (type === "shield") {
+        p.shield = CONFIG.powerup.shieldTime;
+        Sound.power();
+      } else if (type === "bomb") {
+        // 清屏：摧毁所有在场敌人
+        for (const e of this.enemies) {
+          if (!e.dead) {
+            e.dead = true;
+            this.score += CONFIG.killScore;
+            this.boom(e.x + e.w / 2, e.y + e.h / 2);
+          }
+        }
+        Sound.bomb();
+      }
+      this.updateHud();
     }
 
     respawnOrLose() {
@@ -638,6 +718,11 @@
       this.el.bestHud.textContent = this.best;
       this.el.lives.textContent = Math.max(this.lives, 0);
       this.el.enemies.textContent = this.enemiesRemaining + this.enemies.length;
+      if (this.el.power) {
+        const lv = this.player ? this.player.powerLevel : 1;
+        const sh = this.player && this.player.shield > 0 ? " 🛡" : "";
+        this.el.power.textContent = "Lv" + lv + sh;
+      }
       if (this.el.sound) this.el.sound.textContent = Sound.enabled ? "开" : "关";
     }
 
@@ -657,15 +742,23 @@
       if (this.baseAlive) this.drawBase(ctx);
 
       if (this.state !== "menu") {
-        for (const e of this.enemies) this.drawTank(ctx, e, "#d1495b", "#7a2530");
+        for (const e of this.enemies) {
+          // 携带道具的敌人闪烁高亮，提示玩家优先击杀
+          const flash = e.carry && Math.floor(performance.now() / 200) % 2 === 0;
+          this.drawTank(ctx, e, flash ? "#f24e8b" : "#d1495b", "#7a2530");
+        }
         if (this.player && !this.player.dead) {
           const blink = this.player.spawnGuard > 0 && Math.floor(performance.now() / 120) % 2 === 0;
           if (!blink) this.drawTank(ctx, this.player, "#f2c14e", "#9c7a1f");
+          if (this.player.shield > 0) this.drawShield(ctx, this.player);
         }
       }
 
       ctx.fillStyle = "#ffffff";
       for (const b of this.bullets) ctx.fillRect(b.x, b.y, b.w, b.h);
+
+      // 道具
+      for (const pu of this.powerups) this.drawPowerup(ctx, pu);
 
       // 草丛覆盖坦克
       for (let r = 0; r < ROWS; r++)
@@ -750,6 +843,37 @@
       ctx.fill();
       ctx.restore();
     }
+
+    drawPowerup(ctx, pu) {
+      const x = pu.x, y = pu.y, w = pu.w, h = pu.h;
+      const blink = pu.life < 3 && Math.floor(performance.now() / 150) % 2 === 0;
+      if (blink) return;                          // 即将消失时闪烁
+      ctx.save();
+      ctx.fillStyle = "#11161d";
+      ctx.fillRect(x, y, w, h);
+      ctx.lineWidth = 2;
+      const color = pu.type === "star" ? "#f2c14e" : pu.type === "shield" ? "#4ea8de" : "#d1495b";
+      ctx.strokeStyle = color;
+      ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      ctx.fillStyle = color;
+      ctx.font = "bold 16px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const icon = pu.type === "star" ? "★" : pu.type === "shield" ? "⛊" : "✸";
+      ctx.fillText(icon, x + w / 2, y + h / 2 + 1);
+      ctx.restore();
+    }
+
+    drawShield(ctx, t) {
+      const c = t.center();
+      ctx.save();
+      ctx.strokeStyle = "rgba(78,168,222,0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, t.w / 2 + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /* ===================== 启动与事件绑定 ===================== */
@@ -764,7 +888,7 @@
     game.el.bestHud.textContent = game.best;
     game.showOverlay(
       "坦克大战 · opus-version",
-      "用方向键 / WASD 移动，空格开火。\n摧毁所有敌方坦克并守住底部基地！\nP / Esc 暂停，M 开关音效。",
+      "用方向键 / WASD 移动，空格开火。\n摧毁所有敌方坦克并守住底部基地！\n击毁闪光的敌人会掉落道具：★升级火力 ⛊护盾 ✸清屏。\nP / Esc 暂停，M 开关音效。",
       "开始游戏",
       () => { game.resetSession(); game.state = "playing"; }
     );
