@@ -144,6 +144,16 @@
 
   const BEST_KEY = "tank_battle_opus_best";
 
+  // ---- 可调参数集中配置（Round2 重构：消除魔法数字）----
+  const CONFIG = {
+    player:  { speed: 95, bulletSpeed: 270, fireGap: 0.32, spawnGuard: 1.4, maxBullets: 2 },
+    enemy:   { speed: 55, bulletSpeed: 190, fireGap: 1.1,  spawnGuard: 0.6, speedPerLevel: 4, baseSpeed: 50 },
+    spawnInterval: 2.2,      // 敌人刷新间隔（秒）
+    killScore: 100,          // 击毁敌人得分
+    clearBonus: 200,         // 过关奖励
+    dtCap: 0.05,             // 单帧最大 dt（防切后台穿墙）
+  };
+
   // ---- 工具函数 ----
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const rnd = (n) => Math.floor(Math.random() * n);
@@ -239,12 +249,13 @@
       this.y = row * TILE + 2;
       this.dir = kind === "player" ? "up" : "down";
       this.kind = kind;
-      this.speed = kind === "player" ? 95 : 55;
-      this.bulletSpeed = kind === "player" ? 270 : 190;
+      const cfg = kind === "player" ? CONFIG.player : CONFIG.enemy;
+      this.speed = cfg.speed;
+      this.bulletSpeed = cfg.bulletSpeed;
       this.cooldown = 0;
-      this.fireGap = kind === "player" ? 0.32 : 1.1;
+      this.fireGap = cfg.fireGap;
       this.dead = false;
-      this.spawnGuard = kind === "player" ? 1.4 : 0.6; // 出生保护
+      this.spawnGuard = cfg.spawnGuard;     // 出生保护
       this.aiTurn = rnd(2) + 1;
       this.aiFire = Math.random() * 1.2 + 0.4;
     }
@@ -268,6 +279,11 @@
 
     fire(game) {
       if (!this.canFire()) return;
+      // 玩家同屏子弹上限（经典坦克大战手感）
+      if (this.kind === "player") {
+        const live = game.bullets.filter((b) => b.owner === "player" && !b.dead).length;
+        if (live >= CONFIG.player.maxBullets) return;
+      }
       const c = this.center();
       const d = DIRS[this.dir];
       const bx = c.x + d.x * (this.w / 2 + 4);
@@ -381,7 +397,7 @@
       if (!pts.length) return;
       const p = pts[rnd(pts.length)];
       const e = new Tank(p.c, p.r, "enemy");
-      e.speed = 50 + this.level * 4;       // 关卡越高越快
+      e.speed = CONFIG.enemy.baseSpeed + this.level * CONFIG.enemy.speedPerLevel; // 关卡越高越快
       this.enemies.push(e);
       this.enemiesRemaining--;
       this.updateHud();
@@ -433,7 +449,7 @@
     loop(now) {
       let dt = (now - this.lastTime) / 1000;
       this.lastTime = now;
-      if (dt > 0.05) dt = 0.05;        // 切后台防穿墙
+      if (dt > CONFIG.dtCap) dt = CONFIG.dtCap;        // 切后台防穿墙
       if (this.state === "playing") this.update(dt);
       this.render();
       requestAnimationFrame(this.boundLoop);
@@ -451,7 +467,7 @@
       this.bullets = this.bullets.filter((b) => !b.dead);
 
       this.spawnTimer -= dt;
-      if (this.spawnTimer <= 0) { this.spawnTimer = 2.2; this.spawnEnemy(); }
+      if (this.spawnTimer <= 0) { this.spawnTimer = CONFIG.spawnInterval; this.spawnEnemy(); }
 
       if (!this.baseAlive) return this.gameOver("基地被摧毁了！");
       if (this.player.dead) { this.respawnOrLose(); return; }
@@ -498,7 +514,7 @@
           for (const e of this.enemies) {
             if (!e.dead && aabb(b, e)) {
               e.dead = true; b.dead = true;
-              this.score += 100;
+              this.score += CONFIG.killScore;
               this.boom(e.x + e.w / 2, e.y + e.h / 2);
               this.updateHud();
               break;
@@ -526,7 +542,7 @@
     }
 
     levelClear() {
-      this.score += 200;                  // 过关奖励
+      this.score += CONFIG.clearBonus;                  // 过关奖励
       this.level++;
       this.commitBest();
       this.state = "win";
