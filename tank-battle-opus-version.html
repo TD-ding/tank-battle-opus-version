@@ -240,8 +240,8 @@
     "...B.B.B.....",
     ".B.S.B.S.B.B.",
     ".B.G.S.G.B.B.",
-    ".BB.BBBBB.BB.",
-    "....BBXBB....",
+    ".B.S.BBB.S.B.",
+    ".....BXB.....",
   ];
 
   function buildGrid() {
@@ -453,8 +453,15 @@
     }
 
     spawnPlayer() {
-      const pc = clamp(this.base.c - 2, 0, COLS - 1);
-      this.player = new Tank(pc, ROWS - 1, "player");
+      let pc = clamp(this.base.c - 2, 0, COLS - 1);
+      let pr = ROWS - 1;
+      // 防御性处理：若出生格被实心物占据（会导致“出门走不动”），就近寻找空格
+      const box = { x: pc * TILE + 2, y: pr * TILE + 2, w: TILE - 4, h: TILE - 4 };
+      if (this.collidesSolid(box)) {
+        const spot = this.findFreeCell(pc, pr);
+        if (spot) { pc = spot.c; pr = spot.r; }
+      }
+      this.player = new Tank(pc, pr, "player");
     }
 
     spawnEnemy() {
