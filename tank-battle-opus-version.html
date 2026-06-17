@@ -540,9 +540,15 @@
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) { this.spawnTimer = CONFIG.spawnInterval; this.spawnEnemy(); }
 
+      // 胜负判定：先判过关（避免与最后一帧同归于尽时被误判为失败）
       if (!this.baseAlive) return this.gameOver("基地被摧毁了！");
+      if (this.enemiesRemaining === 0 && this.enemies.length === 0) return this.levelClear();
       if (this.player.dead) { this.respawnOrLose(); return; }
-      if (this.enemiesRemaining === 0 && this.enemies.length === 0) this.levelClear();
+    }
+
+    // 清空按键状态（暂停/失焦时调用，避免恢复后按键“卡住”导致坦克自走）
+    clearInput() {
+      this.input.up = this.input.down = this.input.left = this.input.right = this.input.fire = false;
     }
 
     handlePlayer(dt) {
@@ -711,10 +717,12 @@
     togglePause() {
       if (this.state === "playing") {
         this.state = "paused";
+        this.clearInput();
         this.showOverlay("已暂停", "喘口气～\n按 P / Esc 或点击按钮继续。", "继续游戏",
           () => { this.state = "playing"; });
       } else if (this.state === "paused") {
         this.hideOverlay();
+        this.clearInput();
         this.state = "playing";
       }
     }
